@@ -1,0 +1,108 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mlflow-stack-init
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      labels:
+        app: mlflow-stack-init
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: init-setup
+        image: alpine:latest
+        command: ["/bin/sh"]
+        args:
+          - -c
+          - |
+            echo "=== MLflow Stack Initialization ==="
+            
+            # Install required tools
+            apk add --no-cache openssl curl
+            
+            # Generate MinIO credentials if not provided
+            {{- if .Values.minio.generateCredentials }}
+            {{- if not .Values.minio.accessKey }}
+            echo "Generating MinIO access key..."
+            MINIO_ACCESS_KEY=$(openssl rand -base64 {{ .Values.minio.credentialLength }} | tr -d "=+/" | cut -c1-{{ .Values.minio.credentialLength }})
+            echo "Access Key generated: $MINIO_ACCESS_KEY"
+            {{- else }}
+            MINIO_ACCESS_KEY="{{ .Values.minio.accessKey }}"
+            {{- end }}
+            {{- if not .Values.minio.secretKey }}
+            echo "Generating MinIO secret key..."
+            MINIO_SECRET_KEY=$(openssl rand -base64 {{ mul .Values.minio.credentialLength 2 }} | tr -d "=+/" | cut -c1-{{ mul .Values.minio.credentialLength 2 }})
+            echo "Secret Key generated (first 8 chars): ${MINIO_SECRET_KEY:0:8}..."
+            {{- else }}
+            MINIO_SECRET_KEY="{{ .Values.minio.secretKey }}"
+            {{- end }}
+            {{- end }}
+            
+            # Wait for MinIO to be ready
+            echo "Waiting for MinIO to be available..."
+            until curl -f http://minio:9000/minio/health/live 2>/dev/null; do
+              echo "MinIO not ready, waiting 5 seconds..."
+              sleep 5
+            done
+            echo "MinIO is ready!"
+            
+            # Create bucket using MinIO client
+            echo "Setting up MinIO client..."
+            wget -O /usr/local/bin/mc https://dl.min.io/client/mc/release/linux-arm64/mc
+            chmod +x /usr/local/bin/mc
+            
+            # Configure MinIO client
+            /usr/local/bin/mc alias set myminio http://minio:9000 $MINIO_ACCESS_KEY $MINIO_SECRET_KEY
+            
+            # Create bucket if it doesn't exist
+            echo "Creating bucket '{{ .Values.minio.bucket }}'..."
+            /usr/local/bin/mc mb myminio/{{ .Values.minio.bucket }} --ignore-existing
+            
+            # Set bucket policy for MLflow access
+            echo "Setting bucket policy..."
+            cat > /tmp/policy.json << EOF
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {"AWS": ["*"]},
+                  "Action": ["s3:GetBucketLocation"],
+                  "Resource": ["arn:aws:s3:::{{ .Values.minio.bucket }}"]
+                },
+                {
+                  "Effect": "Allow",
+                  "Principal": {"AWS": ["*"]},
+                  "Action": ["s3:ListBucket"],
+                  "Resource": ["arn:aws:s3:::{{ .Values.minio.bucket }}"]
+                },
+                {
+                  "Effect": "Allow",
+                  "Principal": {"AWS": ["*"]},
+                  "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                  "Resource": ["arn:aws:s3:::{{ .Values.minio.bucket }}/*"]
+                }
+              ]
+            }
+            EOF
+            
+            /usr/local/bin/mc anonymous set-json /tmp/policy.json myminio/{{ .Values.minio.bucket }}
+            
+            echo "=== Initialization Complete ==="
+            echo "MinIO bucket '{{ .Values.minio.bucket }}' is ready for MLflow artifacts"
+        env:
+        - name: MINIO_ROOT_USER
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-secrets
+              key: AWS_ACCESS_KEY_ID
+        - name: MINIO_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-secrets
+              key: AWS_SECRET_ACCESS_KEY

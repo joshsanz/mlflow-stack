@@ -1,0 +1,25 @@
+{{- range $name, $cfg := dict "postgresql" .Values.postgresql "minio" .Values.minio "mlflow" .Values.mlflow }}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-{{ $name }}
+spec:
+  capacity:
+    storage: {{ $cfg.storage }}
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: {{ $cfg.path }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ $cfg.storage }}
+{{- end }}

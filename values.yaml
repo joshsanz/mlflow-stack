@@ -1,0 +1,24 @@
+postgresql:
+  user: mlflow
+  password: mlflowpass
+  database: mlflowdb
+  storage: 5Gi
+  path: /data/postgresql
+
+minio:
+  # Credentials will be auto-generated if empty
+  accessKey: ""  # Leave empty for auto-generation
+  secretKey: ""  # Leave empty for auto-generation  
+  bucket: mlflow
+  storage: 50Gi
+  path: /data/minio
+  nodePortApi: 30090
+  nodePortConsole: 30091
+  # Auto-generation settings
+  generateCredentials: true
+  credentialLength: 16
+
+mlflow:
+  storage: 5Gi
+  path: /data/mlflow
+  nodePort: 32000
